@@ -1,0 +1,58 @@
+import os
+import glob
+
+
+original_folder = 'E:\\ctaDatasets\\train\\original'
+preprocessed_folder = 'E:\\ctaDatasets\\train\\preprocessed'
+labelled_folder = 'E:\\ctaDatasets\\train\\labelled\\training_Lumen'
+
+def preprocess_write_image(in_folder,out_folder):
+    in_file = glob.glob(os.path.join(in_folder, "*mhd"))[0]
+    print(in_file)
+    out_file = os.path.join(out_folder,os.path.basename(in_file))
+    print(out_file)
+    paths = glob.glob(os.path.join(in_folder, "*"))
+    # print(paths)
+    overwrite = True
+    for subject_folder in paths:
+        new_subject_folder = os.path.join(out_folder, os.path.basename(subject_folder))
+        if not os.path.exists(new_subject_folder) or overwrite:
+            if not os.path.exists(new_subject_folder):
+                os.makedirs(new_subject_folder)
+            # preprocess data
+            preprocess_write_image(subject_folder, new_subject_folder)
+
+
+def tuple2numpy(tuple_, decimal_num = 5):
+    return np.around(np.asarray(tuple_), decimal_num)
+
+
+
+
+if __name__ == '__main__':
+    import numpy as np
+    import SimpleITK as sitk
+    origin_path = original_folder + '\\challenge000\\' + 'cta000l.mhd'
+    pv_path = labelled_folder + '\\challenge000\\' + 'pv000.mhd'
+    pv = sitk.ReadImage(pv_path)
+    origin = sitk.ReadImage(origin_path)
+    pv_space, origin_space = tuple2numpy(pv.GetSpacing()), tuple2numpy(origin.GetSpacing())
+    pv_offset, origin_offset = tuple2numpy(pv.GetOrigin()), tuple2numpy(origin.GetOrigin())
+    pv_size, origin_size = np.asarray(pv.GetSize()), np.asarray(origin.GetSize())
+    if np.array_equal(pv_space, origin_space):
+        front = np.round((pv_offset - origin_offset)/pv_space, 0).astype(int)
+        back = (front + pv_size).astype(int)
+        width,heigth,depth = pv_size
+        print(front,back)
+        image_arr = sitk.GetArrayFromImage(pv)
+        image_padded = np.zeros(shape=(depth,heigth,width))
+        print(image_padded.shape,image_arr.shape)
+        image_padded[front[2]:back[2],front[1]:back[1],front[0]:back[0]]=image_arr
+        # image_padded = np.pad(image_arr, {(front[0], back[0]), (front[1], back[1]), (front[2], back[2])},'constant')
+        print(image_padded.shape)
+
+    else:
+        raise ValueError('spacing is not equal')
+
+
+
