@@ -1,4 +1,3 @@
-# coding=gbk
 import vtk
 
 def visualize_3d(reader):
@@ -146,10 +145,13 @@ def display_substract(file1,file2):
 
 
 if __name__ == "__main__":
-    file_train = 'E:\ctaDatasets/train/labelled/training_Lumen/challenge000/pv000.mhd'
+    path1 = 'E:/ctaDatasets/train/original/challenge000/cta000l.mhd'
+    path2 = 'E:/ctaDatasets/train/original/challenge100/cta100r.mhd'
     # sitk_read(file_train)
-    reader_train = vtkImageReader(file_train,True)
+    reader_train = vtkImageReader(path1)
     visualize_3d(reader_train)
+    # reader2 = vtkImageReader(path2)
+    # visualize_3d(reader2)
 
 
     # print(mx_train[45:50,105:110,76:80])

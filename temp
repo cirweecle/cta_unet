@@ -1,58 +1,198 @@
 import os
 import glob
+import numpy as np
+import SimpleITK as sitk
+
+OUT_DIR = 'E:/ctaDatasets/train/preprocessedRight'
 
 
-original_folder = 'E:\\ctaDatasets\\train\\original'
-preprocessed_folder = 'E:\\ctaDatasets\\train\\preprocessed'
-labelled_folder = 'E:\\ctaDatasets\\train\\labelled\\training_Lumen'
+def save_image(in_folder = 'E:/ctaDatasets/train/original/right',
+               label_folder= 'E:/ctaDatasets/train/label/training_Lumen',
+               out_folder= 'E:/ctaDatasets/train/preprocessedRight',
+               resample_spacing = (0.25,0.25,0.6),
+               img_size = (512,512,512), #width,height,depth
+               ):
+    samples = os.listdir(in_folder)
+    img_counts = len(samples)
+    width,height,depth = img_size
+    original = np.zeros((img_counts, width, height, depth), dtype=np.uint16)
+    roi = np.zeros((img_counts, width, height, depth), dtype=np.uint16)
+    pv = np.zeros((img_counts, width, height, depth), dtype=np.uint16)
+    img_num = 0
+    for sample in samples:
+        origin_file = glob.glob(os.path.join(in_folder, sample, "*mhd"))[0]
+        # original mhd file of image
+        # an example of origin_file is 'E:/ctaDatasets/train/original/right\\challenge001\\cta001r.mhd'
+        pv_file = glob.glob(os.path.join(label_folder, sample, "pv*mhd"))[0]
+        # annotation mhd file of image which only covers region of interest
+        out_dir = os.path.join(out_folder, sample)
 
-def preprocess_write_image(in_folder,out_folder):
-    in_file = glob.glob(os.path.join(in_folder, "*mhd"))[0]
-    print(in_file)
-    out_file = os.path.join(out_folder,os.path.basename(in_file))
-    print(out_file)
-    paths = glob.glob(os.path.join(in_folder, "*"))
-    # print(paths)
-    overwrite = True
-    for subject_folder in paths:
-        new_subject_folder = os.path.join(out_folder, os.path.basename(subject_folder))
-        if not os.path.exists(new_subject_folder) or overwrite:
-            if not os.path.exists(new_subject_folder):
-                os.makedirs(new_subject_folder)
-            # preprocess data
-            preprocess_write_image(subject_folder, new_subject_folder)
+        origin = sitk.ReadImage(origin_file)
+        print(get_maximum_value(origin))
+        pv = sitk.ReadImage(pv_file)
+        padded_pv, padded_roi = pad_roi_annotation(pv, origin)
+        resampled_origin = resample_image(origin, resample_spacing)
+        resampled_pv = resample_image(padded_pv, resample_spacing, True)
+        resampled_roi = resample_image(padded_roi, resample_spacing, True)
+        sized_origin = pad_or_crop_image(resampled_origin, img_size)
+        sized_pv = pad_or_crop_image(resampled_pv, img_size)
+        sized_roi = pad_or_crop_image(resampled_roi, img_size)
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+        # print(os.path.join(out_dir, 'pv.mhd'))
+        sitk.WriteImage(sized_origin, os.path.join(out_dir, 'origin.mhd'))
+        sitk.WriteImage(sized_pv, os.path.join(out_dir, 'pv.mhd'))
+        sitk.WriteImage(sized_roi, os.path.join(out_dir, 'roi.mhd'))
+        original[img_num] = sitk.GetArrayFromImage(sized_origin)
+        pv[img_num] = sitk.GetArrayFromImage(sized_pv)
+        roi[img_num] = sitk.GetArrayFromImage(sized_roi)
+        img_num = img_num + 1
+    np.save(os.path.join(out_folder, "origin"), original)
+    np.save(os.path.join(out_folder, "pv"), pv)
+    np.save(os.path.join(out_folder, "roi"), roi)
+    log_msg("finally get here")
+    print("finally get here")
 
 
-def tuple2numpy(tuple_, decimal_num = 5):
+def get_maximum_value(sitk_img):
+    max_filter = sitk.StatisticsImageFilter()
+    max_filter.Execute(sitk_img)
+    max = max_filter.GetMaximum()
+    min = max_filter.GetMinimum()
+    return max, min
+
+
+def log_msg(msg):
+    with open(os.path.join(OUT_DIR,'log.log'), 'a') as f:
+        f.write(str(msg) + '\n')
+    print(msg)
+
+
+def tuple2numpy(tuple_, decimal_num=5):
+    """turn tuple to numpy and for each element, save 5 numbers after the decimal point"""
     return np.around(np.asarray(tuple_), decimal_num)
 
 
-
-
-if __name__ == '__main__':
-    import numpy as np
-    import SimpleITK as sitk
-    origin_path = original_folder + '\\challenge000\\' + 'cta000l.mhd'
-    pv_path = labelled_folder + '\\challenge000\\' + 'pv000.mhd'
-    pv = sitk.ReadImage(pv_path)
-    origin = sitk.ReadImage(origin_path)
-    pv_space, origin_space = tuple2numpy(pv.GetSpacing()), tuple2numpy(origin.GetSpacing())
-    pv_offset, origin_offset = tuple2numpy(pv.GetOrigin()), tuple2numpy(origin.GetOrigin())
-    pv_size, origin_size = np.asarray(pv.GetSize()), np.asarray(origin.GetSize())
-    if np.array_equal(pv_space, origin_space):
-        front = np.round((pv_offset - origin_offset)/pv_space, 0).astype(int)
-        back = (front + pv_size).astype(int)
-        width,heigth,depth = pv_size
-        print(front,back)
-        image_arr = sitk.GetArrayFromImage(pv)
-        image_padded = np.zeros(shape=(depth,heigth,width))
-        print(image_padded.shape,image_arr.shape)
-        image_padded[front[2]:back[2],front[1]:back[1],front[0]:back[0]]=image_arr
-        # image_padded = np.pad(image_arr, {(front[0], back[0]), (front[1], back[1]), (front[2], back[2])},'constant')
-        print(image_padded.shape)
-
+def pad_roi_annotation(annotaion_sitk_image, origin_sitk_image, fill_value=0):
+    annotation_spacing  = tuple2numpy(annotaion_sitk_image.GetSpacing())
+    origin_spacing = tuple2numpy(origin_sitk_image.GetSpacing())
+    """generally, the spacing of the original and annotated image is the same
+           next, pad the annotated image into the size of original image with 0
+           also, the annotated image represent the region of interest"""
+    if np.array_equal(annotation_spacing, origin_spacing):
+        offset_origin = tuple2numpy(origin_sitk_image.GetOrigin())
+        offset_anootate =tuple2numpy(annotaion_sitk_image.GetOrigin())
+        size_origin = np.asarray(origin_sitk_image.GetSize())
+        size_annotate = np.asarray(annotaion_sitk_image.GetSize())
+        front = np.round((offset_anootate - offset_origin)/annotation_spacing)
+        back = size_origin - size_annotate - front
+        print(front, back)
+        pad_filter = sitk.ConstantPadImageFilter()
+        pad_filter.SetPadLowerBound([int(front[0]), int(front[1]), int(front[2])])
+        pad_filter.SetPadUpperBound([int(back[0]), int(back[1]), int(back[2])])
+        pad_filter.SetConstant(fill_value)
+        padded_annotation = pad_filter.Execute(annotaion_sitk_image)
+        # 2) roi
+        width_origin, height_origin, depth_origin = size_origin
+        width_annotate, height_annotate, depth_annotate = size_annotate
+        roi_zeros = np.zeros(shape=(depth_origin, height_origin, width_origin))
+        arr_roi = np.ones(shape= (depth_annotate, height_annotate, width_annotate))
+        # the start index of roi to pad
+        start = np.round((offset_anootate - offset_origin) / annotation_spacing).astype(dtype=int)
+        # the final index of roi to pad
+        end = (start + size_annotate).astype(dtype=int)
+        roi_zeros[start[2]:end[2], start[1]:end[1], start[0]:end[0]] = arr_roi
+        padded_roi = sitk.GetImageFromArray(roi_zeros)
+        padded_roi = sitk.Cast(padded_roi, sitk.sitkUInt16)
+        padded_roi.SetOrigin(offset_origin)
+        padded_roi.SetSpacing(annotation_spacing)
+        padded_annotation = sitk.Cast(padded_annotation, sitk.sitkUInt16)
+        print(padded_annotation)
+        print(padded_roi)
+        return padded_annotation, padded_roi
     else:
         raise ValueError('spacing is not equal')
 
 
+def resample_image(sitk_image, spacing=(1, 1, 1), annotation=False, fill_value=0):
+    """Binary input are resampled with nearest neighbors,
+     otherwise linear interpolation is chosen."""
+    if annotation:
+        interpolator = sitk.sitkNearestNeighbor
+    else:
+        interpolator = sitk.sitkLinear
+    # orig_pixelid = sitk_image.GetPixelIDValue()
+    # to reduce cost of memory , cast to usigned int16
+    orig_origin = sitk_image.GetOrigin()
+    orig_direction = sitk_image.GetDirection()
+    orig_spacing = np.array(sitk_image.GetSpacing())
+    orig_size = np.array(sitk_image.GetSize(), dtype=np.int)
+    new_spacing = [float(s) for s in spacing]
+    new_size = orig_size * (orig_spacing / new_spacing)
+    new_size = np.ceil(new_size).astype(np.int)  # Image dimensions are in integers
+    new_size = [int(s) for s in new_size]  # SimpleITK expects lists, not ndarrays
 
+    resample_filter = sitk.ResampleImageFilter()
+    # we do not use ResampleImageFilter.SetReferenceImage() here because it set the output origin, output size,
+    # output spacing and output direction the same as the referenceImage, we do not care if the origins of the images
+    # are the same, we just want the spacings and directions of the images are the same
+    resampled_sitk_image = resample_filter.Execute(sitk_image,
+                                                   new_size,
+                                                   sitk.Transform(),
+                                                   interpolator,
+                                                   orig_origin,
+                                                   new_spacing,
+                                                   orig_direction,
+                                                   fill_value,
+                                                   sitk.sitkUInt16)
+    print(resampled_sitk_image.GetSize(), resampled_sitk_image.GetOrigin(),
+          resampled_sitk_image.GetDimension(), resampled_sitk_image.GetSpacing(),
+          resampled_sitk_image.GetPixelIDValue())
+    return resampled_sitk_image
+
+
+def pad_or_crop_image(input_image, output_size, padding_value=0):
+    """if output_size is larger than the size of the input_image, then do padding,
+       otherwise do cropping.
+       output_size(x,y,z) must be larger or smaller than the size of input_image at the same time"""
+    input_size = input_image.GetSize()
+    input_size, output_size = np.asarray(input_size), np.asarray(output_size)
+    if np.greater_equal(input_size, output_size).all():
+        # do cropping
+        new_size_down = [int((input_size[0] - output_size[0]) / 2),
+                         int((input_size[1] - output_size[1]) / 2),
+                         int((input_size[2] - output_size[2]) / 2)]
+        new_size_up = [int(input_size[0] - output_size[0] - new_size_down[0]),
+                       int(input_size[1] - output_size[1] - new_size_down[1]),
+                       int(input_size[2] - output_size[2] - new_size_down[2])]
+        crop_filter = sitk.CropImageFilter()
+        crop_filter.SetLowerBoundaryCropSize(new_size_down)
+        crop_filter.SetUpperBoundaryCropSize(new_size_up)
+        input_image = crop_filter.Execute(input_image)
+        return input_image
+    elif np.greater_equal(output_size, input_size).all():
+        # do padding
+        new_size_down = [int((output_size[0] - input_size[0]) / 2),
+                         int((output_size[1] - input_size[1]) / 2),
+                         int((output_size[2] - input_size[2]) / 2)]
+        new_size_up = [int(output_size[0] - input_size[0] - new_size_down[0]),
+                       int(output_size[1] - input_size[1] - new_size_down[1]),
+                       int(output_size[2] - input_size[2] - new_size_down[2])]
+        pad_filter = sitk.ConstantPadImageFilter()
+        pad_filter.SetConstant(padding_value)
+        pad_filter.SetPadUpperBound(new_size_up)
+        pad_filter.SetPadLowerBound(new_size_down)
+        input_image = pad_filter.Execute(input_image)
+        return input_image
+    else:
+        raise ValueError('output size wanted is nonvalid')
+
+
+if __name__ == '__main__':
+    original_folder = 'E:/ctaDatasets/train/original/right'
+    preprocessed_folder = 'E:/ctaDatasets/train/preprocessedRight'
+    labelled_folder = 'E:/ctaDatasets/train/labelled/training_Lumen'
+    origin_path = original_folder + '\\challenge000\\' + 'cta000l.mhd'
+    pv_path = labelled_folder + '\\challenge000\\' + 'pv000.mhd'
+    save_image()
+    print('finished')
